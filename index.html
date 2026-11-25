@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>India Landslide Prophet · ML Map</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; background: #04070d; font-family: 'Inter', sans-serif; color: #fff; }
+        #globeViz { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 1; cursor: crosshair; }
+        .city-label { color: rgba(255,255,255,0.9); font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 700; text-shadow: 0 0 4px #000, 0 0 8px #000, 0 0 12px #000; pointer-events: none; white-space: nowrap; transform: translate(-50%, -50%); letter-spacing: 0.05em; user-select: none; }
+        
+        /* HUD (Top Left) */
+        #hud { position: fixed; top: 24px; left: 24px; z-index: 10; pointer-events: none; display: flex; gap: 10px; flex-wrap: wrap; }
+        .badge { background: rgba(10,15,25,0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); padding: 10px 18px; border-radius: 100px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: #aaa; letter-spacing: 0.05em; }
+        .badge.live { color: #2ecc71; border-color: rgba(46,204,113,0.3); }
+        .badge.off  { color: #e74c3c; border-color: rgba(231,76,60,0.3); }
+
+        /* Search Bar (Top Center) */
+        #search-container {
+            position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+            z-index: 10; display: flex; gap: 8px;
+            background: rgba(10,15,25,0.85); backdrop-filter: blur(20px);
+            padding: 6px; border-radius: 100px; border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            width: 380px; max-width: calc(100vw - 48px);
+        }
+        #search-input {
+            flex: 1; background: transparent; border: none; outline: none;
+            color: #fff; font-family: 'Inter', sans-serif; font-size: 0.85rem;
+            padding: 10px 16px; border-radius: 100px;
+        }
+        #search-input::placeholder { color: rgba(255,255,255,0.4); }
+        #search-btn {
+            background: #ff6b35; color: #fff; border: none; outline: none;
+            padding: 10px 20px; border-radius: 100px; cursor: pointer;
+            font-weight: 700; font-size: 0.8rem; transition: background 0.2s;
+        }
+        #search-btn:hover { background: #ff8c5a; }
+        #search-btn:disabled { background: #555; cursor: wait; }
+
+        /* Prediction Card (Right) */
+        #prediction-card { position: fixed; top: 50%; right: 24px; width: 340px; max-width: calc(100vw - 48px); padding: 24px; background: rgba(10,15,25,0.9); backdrop-filter: blur(30px); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; z-index: 10; transform: translateY(-50%) translateX(480px); transition: transform 0.5s cubic-bezier(0.2, 1, 0.3, 1); box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+        #prediction-card.show { transform: translateY(-50%) translateX(0); }
+        #close-card { position: absolute; top: 12px; right: 16px; background: none; border: none; color: #888; font-size: 1.2rem; cursor: pointer; line-height: 1; padding: 4px; }
+        #close-card:hover { color: #fff; }
+        .risk-value { font-size: 3.5rem; font-weight: 900; line-height: 1; letter-spacing: -0.03em; }
+        .risk-label { font-size: 0.7rem; font-weight: 800; letter-spacing: 0.2em; text-transform: uppercase; margin-top: 8px; }
+        .stat-row { display: flex; justify-content: space-between; margin-top: 12px; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px; }
+        .stat-key { color: rgba(255,255,255,0.5); }
+        .stat-val { font-weight: 700; }
+        .est { color: #e67e22; font-weight: 400; font-size: 0.65rem; margin-left: 4px; }
+
+        /* Loading Overlay */
+        #loading { position: fixed; inset: 0; background: #04070d; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; transition: opacity 0.8s; pointer-events: none; }
+        #loading.hidden { opacity: 0; }
+        .spinner { width: 50px; height: 50px; border-radius: 50%; border: 2px solid rgba(255,107,53,0.15); border-top-color: #ff6b35; animation: spin 1s linear infinite; margin-bottom: 24px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .l-text { font-family: 'JetBrains Mono'; font-size: 0.8rem; letter-spacing: 0.3em; color: #ff6b35; text-align: center; }
+    </style>
+</head>
+<body>
+    <div id="globeViz"></div>
+
+    <!-- Search Bar -->
+    <div id="search-container">
+        <input type="text" id="search-input" placeholder="Search address, city, or lat,lng..." autocomplete="off">
+        <button id="search-btn">Find</button>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud">
+        <div class="badge">🇮🇳 ML LANDSLIDE RISK</div>
+        <div class="badge" id="api-status">CONNECTING…</div>
+    </div>
+
+    <!-- Prediction Card -->
+    <div id="prediction-card">
+        <button id="close-card" aria-label="Close">✕</button>
+        <div style="font-size: 0.65rem; color: #888; letter-spacing: 0.2em;">TARGET SECTOR</div>
+        <div id="place-name" style="font-family: 'Inter'; font-size: 1rem; font-weight: 700; margin-bottom: 4px; color: #fff;">—</div>
+        <div id="coords" style="font-family: 'JetBrains Mono'; font-size: 0.75rem; color: #888; margin-bottom: 20px;">—</div>
+        <div class="risk-value" id="risk-val">—</div>
+        <div class="risk-label" id="risk-lbl">—</div>
+        <div class="stat-row"><span class="stat-key">SLOPE</span><span class="stat-val" id="val-slope">—</span></div>
+        <div class="stat-row"><span class="stat-key">RAIN 7D</span><span class="stat-val" id="val-rain">—</span></div>
+        <div class="stat-row"><span class="stat-key">ELEVATION</span><span class="stat-val" id="val-elev">—</span></div>
+        <div class="stat-row"><span class="stat-key">ASPECT</span><span class="stat-val" id="val-aspect">—</span></div>
+        <div class="stat-row"><span class="stat-key">RIVER DIST</span><span class="stat-val" id="val-river">—</span></div>
+        <div class="stat-row"><span class="stat-key">NDVI</span><span class="stat-val" id="val-ndvi">—</span></div>
+    </div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div class="l-text" id="load-text">RENDERING HOLOGRAM...</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/globe.gl@2.31.0/dist/globe.gl.min.js"></script>
+
+    <script>
+        const API_BASE = "http://localhost:8000";
+
+        window.addEventListener('load', () => {
+            const globeEl = document.getElementById('globeViz');
+            let activeRequest = 0;
+
+            const myGlobe = Globe()(globeEl)
+                .globeImageUrl('https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg')
+                .backgroundColor('rgba(0,0,0,0)')
+                .atmosphereColor('#3a80cc')
+                .atmosphereAltitude(0.15);
+
+            myGlobe.ringsData([]).ringColor(() => t => `rgba(255, 107, 53, ${1 - t})`).ringMaxRadius(4).ringPropagationSpeed(3).ringRepeatPeriod(800);
+
+            const cities = [
+                { name: "Delhi", lat: 28.7041, lng: 77.1025 }, { name: "Mumbai", lat: 19.0760, lng: 72.8777 },
+                { name: "Kolkata", lat: 22.5726, lng: 88.3639 }, { name: "Bengaluru", lat: 12.9716, lng: 77.5946 },
+                { name: "Chennai", lat: 13.0827, lng: 80.2707 }, { name: "Hyderabad", lat: 17.3850, lng: 78.4867 },
+                { name: "Aizawl", lat: 23.7307, lng: 92.7179 }, { name: "Gangtok", lat: 27.3389, lng: 88.6065 },
+                { name: "Shillong", lat: 25.5788, lng: 91.8933 }, { name: "Kohima", lat: 25.6747, lng: 94.1086 },
+                { name: "Imphal", lat: 24.8170, lng: 93.9368 }, { name: "Agartala", lat: 23.8315, lng: 91.2868 },
+                { name: "Itanagar", lat: 27.0844, lng: 93.6053 }, { name: "Guwahati", lat: 26.1445, lng: 91.7362 }
+            ];
+            myGlobe.htmlElementsData(cities).htmlAltitude(0.035).htmlElement(d => {
+                const el = document.createElement('div'); el.className = 'city-label'; el.textContent = d.name; return el;
+            });
+
+            const worldUrl = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+            const stateUrl = 'https://cdn.jsdelivr.net/gh/udit-001/india-maps-data@main/geojson/india.geojson';
+            Promise.all([
+                fetch(worldUrl).then(r => r.json()).catch(() => ({ objects: { countries: { geometries: [] } } })),
+                fetch(stateUrl).then(r => r.json()).catch(() => ({ features: [] }))
+            ]).then(([worldData, stateData]) => {
+                if (worldData?.objects?.countries) {
+                    const india = topojson.feature(worldData, worldData.objects.countries).features.find(c => c.properties.name === 'India');
+                    if (india) myGlobe.polygonsData([india]).polygonAltitude(0.03).polygonCapColor(() => 'rgba(255, 107, 53, 0.15)').polygonSideColor(() => 'rgba(255, 107, 53, 0.9)').polygonStrokeColor(() => '#ffcc80');
+                }
+                if (stateData.features?.length > 0) {
+                    const statePaths = [];
+                    stateData.features.forEach(f => {
+                        if (!f.geometry) return;
+                        const processRing = (ring) => statePaths.push({ coords: ring.map(c => ({ lat: c[1], lng: c[0] })), color: '#88d8ff' });
+                        if (f.geometry.type === 'Polygon') f.geometry.coordinates.forEach(processRing);
+                        else if (f.geometry.type === 'MultiPolygon') f.geometry.coordinates.forEach(poly => poly.forEach(processRing));
+                    });
+                    myGlobe.pathsData(statePaths).pathPoints('coords').pathPointLat(p => p.lat).pathPointLng(p => p.lng).pathColor('color').pathStroke('#88d8ff').pathDashLength(0.05).pathDashGap(0.001).pathTransitionDuration(0);
+                }
+                document.getElementById('loading').classList.add('hidden');
+            });
+
+            (async () => {
+                const el = document.getElementById('api-status');
+                try {
+                    const r = await fetch(`${API_BASE}/health`, { cache: 'no-store' });
+                    const data = await r.json();
+                    if (data.model_loaded) { el.textContent = "MODEL · ONLINE"; el.classList.add('live'); }
+                    else { el.textContent = "MODEL · OFFLINE"; el.classList.add('off'); }
+                } catch { el.textContent = "API · UNREACHABLE"; el.classList.add('off'); }
+            })();
+
+            // ---------------------------------------------------------
+            // BULLETPROOF CLICK HANDLER
+            // ---------------------------------------------------------
+            globeEl.addEventListener('click', (e) => {
+                if (e.target.tagName === 'CANVAS') {
+                    const rect = globeEl.getBoundingClientRect();
+                    const coords = myGlobe.toGlobeCoords(e.clientX - rect.left, e.clientY - rect.top);
+                    if (coords) handleGlobeClick(coords);
+                }
+            });
+
+            async function handleGlobeClick(coords, customName = null) {
+                try {
+                    if (!coords || typeof coords.lat !== 'number') return;
+                    const { lat, lng } = coords;
+                    const requestId = ++activeRequest;
+
+                    document.getElementById('place-name').textContent = customName || 'Querying model…';
+                    document.getElementById('coords').textContent = `${lat.toFixed(3)}°N · ${lng.toFixed(3)}°E`;
+                    document.getElementById('risk-val').textContent = '…';
+                    document.getElementById('risk-lbl').textContent = '…';
+                    document.getElementById('prediction-card').classList.add('show');
+                    myGlobe.ringsData([{ lat, lng }]);
+
+                    // Smooth camera fly-to
+                    myGlobe.pointOfView({ lat, lng, altitude: 1.2 }, 1000);
+
+                    const res = await fetch(`${API_BASE}/predict`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lat, lng })
+                    });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const data = await res.json();
+                    
+                    if (requestId !== activeRequest) return;
+
+                    if (!customName) {
+                        try {
+                            const geo = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`).then(r => r.json());
+                            if (requestId !== activeRequest) return;
+                            document.getElementById('place-name').textContent = geo?.display_name ? geo.display_name.split(',').slice(0, 3).join(',') : 'Remote Area';
+                        } catch {
+                            if (requestId !== activeRequest) return;
+                            document.getElementById('place-name').textContent = 'Remote Area';
+                        }
+                    }
+
+                    const risk = data.risk;
+                    const color = risk > 0.75 ? '#e74c3c' : risk > 0.50 ? '#e67e22' : risk > 0.25 ? '#f1c40f' : '#2ecc71';
+                    
+                    document.getElementById('risk-val').textContent = `${(risk * 100).toFixed(0)}%`;
+                    document.getElementById('risk-val').style.color = color;
+                    document.getElementById('risk-lbl').textContent = data.label;
+                    document.getElementById('risk-lbl').style.color = color;
+
+                    const raw = data.raw_live_values || {};
+                    const s = data.sources || {};
+                    const est = (key) => s[key] === 'estimated' ? '<span class="est">(est)</span>' : '';
+
+                    document.getElementById('val-slope').innerHTML = raw.slope_deg !== undefined ? `${raw.slope_deg.toFixed(1)}°` : `~15°${est('Slope_z')}`;
+                    document.getElementById('val-rain').innerHTML = raw.rainfall !== undefined ? `${raw.rainfall.toFixed(0)} mm` : `—${est('Rainfall_z')}`;
+                    document.getElementById('val-elev').innerHTML = raw.elevation !== undefined ? `${raw.elevation.toFixed(0)} m` : `—${est('Elevation_z')}`;
+                    document.getElementById('val-aspect').innerHTML = raw.aspect_c !== undefined ? `${raw.aspect_c.toFixed(0)}°` : `—${est('Aspect_z')}`;
+                    document.getElementById('val-river').innerHTML = `—${est('Dist_River_z')}`;
+                    document.getElementById('val-ndvi').innerHTML = `—${est('NDVI_z')}`;
+
+                } catch (err) {
+                    console.error("Click error:", err);
+                    document.getElementById('place-name').textContent = 'API Error';
+                    document.getElementById('risk-val').textContent = '—';
+                    document.getElementById('risk-lbl').textContent = '—';
+                }
+            }
+
+            // ---------------------------------------------------------
+            // SEARCH BAR LOGIC
+            // ---------------------------------------------------------
+            const searchInput = document.getElementById('search-input');
+            const searchBtn = document.getElementById('search-btn');
+
+            async function performSearch() {
+                const query = searchInput.value.trim();
+                if (!query) return;
+
+                searchBtn.disabled = true;
+                searchBtn.textContent = "...";
+
+                // 1. Check if input is raw coordinates (e.g., "27.33, 88.61")
+                const coordRegex = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+                const match = query.match(coordRegex);
+
+                if (match) {
+                    const lat = parseFloat(match[1]);
+                    const lng = parseFloat(match[2]);
+                    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                        handleGlobeClick({ lat, lng }, `Custom Coords`);
+                        searchBtn.disabled = false;
+                        searchBtn.textContent = "Find";
+                        return;
+                    }
+                }
+
+                // 2. Otherwise, treat as address/area name (Forward Geocoding)
+                try {
+                    const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`);
+                    const geoData = await geoRes.json();
+                    
+                    if (geoData && geoData.length > 0) {
+                        const lat = parseFloat(geoData[0].lat);
+                        const lng = parseFloat(geoData[0].lon);
+                        const displayName = geoData[0].display_name.split(',').slice(0, 2).join(',');
+                        handleGlobeClick({ lat, lng }, displayName);
+                    } else {
+                        alert("Location not found. Please try a different area name.");
+                    }
+                } catch (err) {
+                    console.error("Geocoding error:", err);
+                    alert("Failed to search location. Check your internet connection.");
+                } finally {
+                    searchBtn.disabled = false;
+                    searchBtn.textContent = "Find";
+                }
+            }
+
+            searchBtn.addEventListener('click', performSearch);
+            searchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') performSearch();
+            });
+
+            // Close Card
+            document.getElementById('close-card').addEventListener('click', () => {
+                document.getElementById('prediction-card').classList.remove('show');
+                myGlobe.ringsData([]);
+                activeRequest++;
+            });
+
+            // Initial Camera Position
+            setTimeout(() => {
+                try {
+                    const controls = myGlobe.controls();
+                    if (controls) { controls.autoRotate = false; controls.minDistance = 120; controls.enableDamping = true; controls.dampingFactor = 0.08; }
+                    myGlobe.pointOfView({ lat: 22.0, lng: 79.0, altitude: 1.6 }, 2000);
+                } catch {}
+            }, 1000);
+        });
+    </script>
+</body>
+</html>
